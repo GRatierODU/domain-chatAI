@@ -1,6 +1,6 @@
 import asyncio
 from typing import List, Dict, Set, Optional, Tuple
-from urllib.parse import urljoin, urlparse, parse_qs
+from urllib.parse import urljoin, urlparse, parse_qs, urlunparse
 import aiohttp
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, Page
@@ -44,9 +44,11 @@ class IntelligentCrawler:
         self.base_url = f"https://{self.domain}"
         self.max_pages = max_pages
 
-        # Crawl state
+        # Crawl state - using normalized URLs
         self.visited_urls: Set[str] = set()
+        self.visited_normalized: Set[str] = set()  # Track normalized versions
         self.to_visit: asyncio.PriorityQueue = asyncio.PriorityQueue()
+        self.queued_urls: Set[str] = set()  # Track what's already in queue
         self.pages: List[CrawledPage] = []
         self.failed_urls: Dict[str, str] = {}
 
@@ -64,6 +66,45 @@ class IntelligentCrawler:
             "pricing": [r"/pricing", r"/plans", r"/subscribe"],
         }
 
+    def _normalize_url(self, url: str) -> str:
+        """
+        Normalize URL to prevent duplicates
+        - Remove fragments
+        - Remove trailing slashes
+        - Sort query parameters
+        - Lowercase domain
+        """
+        try:
+            parsed = urlparse(url.lower())
+
+            # Remove trailing slash from path
+            path = parsed.path.rstrip("/")
+            if not path:
+                path = "/"
+
+            # Sort query parameters for consistency
+            query_params = parse_qs(parsed.query)
+            sorted_query = "&".join(
+                [f"{k}={','.join(sorted(v))}" for k, v in sorted(query_params.items())]
+            )
+
+            # Reconstruct URL without fragment
+            normalized = urlunparse(
+                (
+                    parsed.scheme,
+                    parsed.netloc,
+                    path,
+                    parsed.params,
+                    sorted_query,
+                    "",  # No fragment
+                )
+            )
+
+            return normalized
+        except Exception as e:
+            logger.error(f"Error normalizing URL {url}: {e}")
+            return url
+
     async def start(self) -> List[CrawledPage]:
         """
         Start intelligent crawling process
@@ -77,9 +118,12 @@ class IntelligentCrawler:
         # Phase 2: Prioritization - Sort by importance
         prioritized_urls = await self._prioritize_urls(discovered_urls)
 
-        # Add to queue with priority
+        # Add to queue with priority, avoiding duplicates
         for priority, url in prioritized_urls:
-            await self.to_visit.put((priority, url))
+            normalized = self._normalize_url(url)
+            if normalized not in self.queued_urls:
+                await self.to_visit.put((priority, url))
+                self.queued_urls.add(normalized)
 
         # Phase 3: Crawling - Extract content with visual understanding
         await self._crawl_phase()
@@ -128,8 +172,13 @@ class IntelligentCrawler:
         # 4. Pattern-based URL generation
         all_urls.update(self._generate_common_urls())
 
-        # Filter to same domain only
-        return {url for url in all_urls if self._is_same_domain(url)}
+        # Filter to same domain only and normalize
+        normalized_urls = set()
+        for url in all_urls:
+            if self._is_same_domain(url):
+                normalized_urls.add(url)
+
+        return normalized_urls
 
     async def _crawl_phase(self):
         """
@@ -177,7 +226,14 @@ class IntelligentCrawler:
                 try:
                     priority, url = await self.to_visit.get()
 
-                    if url in self.visited_urls:
+                    # Normalize URL
+                    normalized_url = self._normalize_url(url)
+
+                    # Skip if already visited (check both raw and normalized)
+                    if (
+                        url in self.visited_urls
+                        or normalized_url in self.visited_normalized
+                    ):
                         continue
 
                     logger.info(f"Worker {worker_id}: Crawling {url}")
@@ -187,14 +243,24 @@ class IntelligentCrawler:
                     if page_data:
                         self.pages.append(page_data)
                         self.visited_urls.add(url)
+                        self.visited_normalized.add(normalized_url)
 
                         # Add new URLs to queue
                         for link in page_data.links:
-                            if link not in self.visited_urls and self._should_crawl(
-                                link
+                            # Normalize the link
+                            normalized_link = self._normalize_url(link)
+
+                            # Check if we should crawl it and if it's not already queued
+                            if (
+                                link not in self.visited_urls
+                                and normalized_link not in self.visited_normalized
+                                and normalized_link not in self.queued_urls
+                                and self._should_crawl(link)
                             ):
+
                                 link_priority = self._calculate_url_priority(link)
                                 await self.to_visit.put((link_priority, link))
+                                self.queued_urls.add(normalized_link)
 
                 except asyncio.TimeoutError:
                     logger.error(f"Timeout crawling {url}")
@@ -707,10 +773,6 @@ class IntelligentCrawler:
         """
         Determine if URL should be crawled
         """
-        # Skip if already visited
-        if url in self.visited_urls:
-            return False
-
         # Must be same domain
         if not self._is_same_domain(url):
             return False
