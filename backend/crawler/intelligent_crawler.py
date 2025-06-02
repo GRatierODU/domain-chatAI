@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass, field
 import logging
 from .discovery_strategies import DiscoveryStrategies
+from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
 
@@ -134,12 +135,18 @@ class IntelligentCrawler:
         """
         Main crawling phase with concurrent workers
         """
-        # Create worker pool
+
+        # Calculate optimal number of workers
+        num_workers = min(10, max(3, self.max_pages // 5))
+
+        logger.info(
+            f"🚀 Starting {num_workers} crawler workers for {self.max_pages} pages"
+        )
+
         workers = []
-        for i in range(min(5, self.max_pages // 100 + 1)):  # Scale workers
+        for i in range(num_workers):
             workers.append(asyncio.create_task(self._crawler_worker(i)))
 
-        # Wait for all workers
         await asyncio.gather(*workers)
 
     async def _crawler_worker(self, worker_id: int):
@@ -210,7 +217,7 @@ class IntelligentCrawler:
                 return None
 
             # Wait for dynamic content
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(500)
 
             # Scroll to load lazy content
             await self._scroll_page(page)
@@ -573,7 +580,7 @@ class IntelligentCrawler:
                 """
                 async () => {
                     const distance = 1000;
-                    const delay = 100;
+                    const delay = 50;
                     const maxScroll = document.body.scrollHeight;
                     
                     for (let currentScroll = 0; currentScroll < maxScroll; currentScroll += distance) {

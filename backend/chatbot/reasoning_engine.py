@@ -8,6 +8,7 @@ from enum import Enum
 import time
 import logging
 from .retrieval_optimizer import OptimizedRetriever
+from .complexity_classifier import ComplexityClassifier
 
 logger = logging.getLogger(__name__)
 
