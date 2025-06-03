@@ -1,22 +1,23 @@
-(function() {
-    'use strict';
-    
-    // Configuration
-    const config = {
-        apiUrl: window.AI_CHATBOT_API_URL || 'http://localhost:8000',
-        position: window.AI_CHATBOT_POSITION || 'bottom-right',
-        theme: window.AI_CHATBOT_THEME || 'modern',
-        autoStart: window.AI_CHATBOT_AUTO_START !== false
-    };
-    
-    // Widget state
-    let sessionId = localStorage.getItem('ai_chatbot_session') || null;
-    let isOpen = false;
-    let isMinimized = false;
-    let crawlStatus = 'pending';
-    
-    // Create widget HTML
-    const widgetHTML = `
+(function () {
+	"use strict";
+
+	// Configuration
+	const config = {
+		apiUrl: window.AI_CHATBOT_API_URL || "http://localhost:8000",
+		domain: window.AI_CHATBOT_DOMAIN || window.location.hostname,
+		position: window.AI_CHATBOT_POSITION || "bottom-right",
+		theme: window.AI_CHATBOT_THEME || "modern",
+		autoStart: window.AI_CHATBOT_AUTO_START !== false,
+	};
+
+	// Widget state
+	let sessionId = localStorage.getItem("ai_chatbot_session") || null;
+	let isOpen = false;
+	let isMinimized = false;
+	let crawlStatus = "pending";
+
+	// Create widget HTML
+	const widgetHTML = `
         <div id="ai-chatbot-container" class="ai-chatbot-container ai-chatbot-${config.position}">
             <div id="ai-chatbot-widget" class="ai-chatbot-widget ai-chatbot-hidden">
                 <div class="ai-chatbot-header">
@@ -46,7 +47,7 @@
                         <p>I'm learning about this website to help answer your questions.</p>
                         <div class="ai-chatbot-loading" id="ai-chatbot-loading">
                             <div class="ai-chatbot-spinner"></div>
-                            <span>Analyzing website content...</span>
+                            <span>Checking website analysis...</span>
                         </div>
                     </div>
                 </div>
@@ -82,9 +83,9 @@
             </button>
         </div>
     `;
-    
-    // Create styles
-    const styles = `
+
+	// Create styles
+	const styles = `
         <style>
             .ai-chatbot-container {
                 position: fixed;
@@ -274,6 +275,11 @@
                 margin: 0;
                 font-size: 14px;
                 line-height: 1.5;
+                color: #374151;
+            }
+            
+            .ai-chatbot-message-user .ai-chatbot-message-text {
+                color: white;
             }
             
             .ai-chatbot-message-sources {
@@ -419,309 +425,367 @@
             }
         </style>
     `;
-    
-    // Inject HTML and styles
-    document.head.insertAdjacentHTML('beforeend', styles);
-    document.body.insertAdjacentHTML('beforeend', widgetHTML);
-    
-    // API class
-    class ChatbotAPI {
-        constructor(apiUrl) {
-            this.apiUrl = apiUrl;
-        }
-        
-        async startCrawl(domain) {
-            const response = await fetch(`${this.apiUrl}/api/crawl`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ domain, max_pages: 100 })
-            });
-            
-            if (!response.ok) {
-                throw new Error('Failed to start crawl');
-            }
-            
-            return response.json();
-        }
-        
-        async getCrawlStatus(jobId) {
-            const response = await fetch(`${this.apiUrl}/api/crawl/${jobId}`);
-            
-            if (!response.ok) {
-                throw new Error('Failed to get crawl status');
-            }
-            
-            return response.json();
-        }
-        
-        async sendMessage(question, sessionId) {
-            const response = await fetch(`${this.apiUrl}/api/chat`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    question,
-                    session_id: sessionId,
-                    require_reasoning: true
-                })
-            });
-            
-            if (!response.ok) {
-                throw new Error('Failed to send message');
-            }
-            
-            return response.json();
-        }
-    }
-    
-    // Initialize API
-    const api = new ChatbotAPI(config.apiUrl);
-    
-    // Main chatbot class
-    class AIChatbot {
-        constructor() {
-            this.widget = document.getElementById('ai-chatbot-widget');
-            this.trigger = document.getElementById('ai-chatbot-trigger');
-            this.messages = document.getElementById('ai-chatbot-messages');
-            this.input = document.getElementById('ai-chatbot-input');
-            this.sendButton = document.getElementById('ai-chatbot-send');
-            this.badge = document.getElementById('ai-chatbot-badge');
-            this.crawlJobId = null;
-            this.ready = false;
-            
-            this.init();
-        }
-        
-        async init() {
-            // Add event listeners
-            this.input.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    this.sendMessage();
-                }
-            });
-            
-            // Auto-start crawling if configured
-            if (config.autoStart) {
-                await this.startCrawling();
-            }
-        }
-        
-        async startCrawling() {
-            try {
-                const domain = window.location.hostname;
-                const result = await api.startCrawl(domain);
-                
-                this.crawlJobId = result.job_id;
-                
-                if (result.status === 'already_crawling') {
-                    // Already ready
-                    this.onCrawlComplete();
-                } else {
-                    // Monitor progress
-                    this.monitorCrawlProgress();
-                }
-            } catch (error) {
-                console.error('Failed to start crawling:', error);
-                this.showError('Failed to initialize. Please refresh the page.');
-            }
-        }
-        
-        async monitorCrawlProgress() {
-            const checkProgress = async () => {
-                try {
-                    const status = await api.getCrawlStatus(this.crawlJobId);
-                    
-                    if (status.status === 'completed') {
-                        this.onCrawlComplete();
-                    } else if (status.status === 'failed') {
-                        this.showError('Failed to analyze website. Please try again.');
-                    } else {
-                        // Update progress
-                        const progress = status.progress || 0;
-                        this.updateProgress(progress);
-                        
-                        // Check again
-                        setTimeout(checkProgress, 2000);
-                    }
-                } catch (error) {
-                    console.error('Failed to check progress:', error);
-                    setTimeout(checkProgress, 5000);
-                }
-            };
-            
-            checkProgress();
-        }
-        
-        updateProgress(progress) {
-            const loading = document.getElementById('ai-chatbot-loading');
-            if (loading) {
-                loading.querySelector('span').textContent = 
-                    `Analyzing website content... ${progress}%`;
-            }
-        }
-        
-        onCrawlComplete() {
-            this.ready = true;
-            this.input.disabled = false;
-            this.sendButton.disabled = false;
-            
-            // Clear welcome message
-            this.messages.innerHTML = '';
-            
-            // Show ready message
-            this.addMessage('bot', 'Hello! I\'ve analyzed this website and I\'m ready to help. What would you like to know?');
-            
-            // Show notification badge
-            if (!isOpen) {
-                this.showBadge();
-            }
-        }
-        
-        showError(message) {
-            const loading = document.getElementById('ai-chatbot-loading');
-            if (loading) {
-                loading.innerHTML = `<span style="color: #ef4444;">${message}</span>`;
-            }
-        }
-        
-        toggle() {
-            if (isOpen) {
-                this.close();
-            } else {
-                this.open();
-            }
-        }
-        
-        open() {
-            isOpen = true;
-            this.widget.classList.remove('ai-chatbot-hidden');
-            this.trigger.style.display = 'none';
-            this.hideBadge();
-            
-            // Focus input if ready
-            if (this.ready) {
-                this.input.focus();
-            }
-            
-            // Start crawling if not started
-            if (!this.crawlJobId && config.autoStart) {
-                this.startCrawling();
-            }
-        }
-        
-        close() {
-            isOpen = false;
-            this.widget.classList.add('ai-chatbot-hidden');
-            this.trigger.style.display = 'flex';
-        }
-        
-        minimize() {
-            isMinimized = !isMinimized;
-            this.widget.classList.toggle('ai-chatbot-minimized');
-        }
-        
-        showBadge() {
-            this.badge.style.display = 'flex';
-        }
-        
-        hideBadge() {
-            this.badge.style.display = 'none';
-        }
-        
-        async sendMessage() {
-            const message = this.input.value.trim();
-            
-            if (!message || !this.ready) return;
-            
-            // Clear input
-            this.input.value = '';
-            
-            // Add user message
-            this.addMessage('user', message);
-            
-            // Show typing indicator
-            const typingId = this.showTyping();
-            
-            try {
-                // Send to API
-                const response = await api.sendMessage(message, sessionId);
-                
-                // Store session ID
-                if (response.session_id) {
-                    sessionId = response.session_id;
-                    localStorage.setItem('ai_chatbot_session', sessionId);
-                }
-                
-                // Remove typing indicator
-                this.removeTyping(typingId);
-                
-                // Add bot response
-                this.addMessage('bot', response.answer, response.sources);
-                
-            } catch (error) {
-                console.error('Failed to send message:', error);
-                this.removeTyping(typingId);
-                this.addMessage('bot', 'Sorry, I encountered an error. Please try again.');
-            }
-        }
-        
-        addMessage(sender, text, sources = []) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `ai-chatbot-message ai-chatbot-message-${sender}`;
-            
-            const avatar = document.createElement('div');
-            avatar.className = 'ai-chatbot-message-avatar';
-            avatar.textContent = sender === 'user' ? 'U' : 'AI';
-            
-            const content = document.createElement('div');
-            content.className = 'ai-chatbot-message-content';
-            
-            const textP = document.createElement('p');
-            textP.className = 'ai-chatbot-message-text';
-            textP.textContent = text;
-            content.appendChild(textP);
-            
-            // Add sources if available
-            if (sources && sources.length > 0) {
-                const sourcesDiv = document.createElement('div');
-                sourcesDiv.className = 'ai-chatbot-message-sources';
-                
-                const sourcesTitle = document.createElement('div');
-                sourcesTitle.className = 'ai-chatbot-message-sources-title';
-                sourcesTitle.textContent = 'Sources:';
-                sourcesDiv.appendChild(sourcesTitle);
-                
-                sources.forEach(source => {
-                    const sourceLink = document.createElement('a');
-                    sourceLink.className = 'ai-chatbot-message-source';
-                    sourceLink.href = source.url;
-                    sourceLink.textContent = source.title || source.url;
-                    sourceLink.target = '_blank';
-                    sourcesDiv.appendChild(sourceLink);
-                });
-                
-                content.appendChild(sourcesDiv);
-            }
-            
-            messageDiv.appendChild(avatar);
-            messageDiv.appendChild(content);
-            
-            this.messages.appendChild(messageDiv);
-            
-            // Scroll to bottom
-            this.messages.scrollTop = this.messages.scrollHeight;
-        }
-        
-        showTyping() {
-            const typingId = `typing-${Date.now()}`;
-            const typingDiv = document.createElement('div');
-            typingDiv.id = typingId;
-            typingDiv.className = 'ai-chatbot-message ai-chatbot-message-bot';
-            typingDiv.innerHTML = `
+
+	// Inject HTML and styles
+	document.head.insertAdjacentHTML("beforeend", styles);
+	document.body.insertAdjacentHTML("beforeend", widgetHTML);
+
+	// API class
+	class ChatbotAPI {
+		constructor(apiUrl) {
+			this.apiUrl = apiUrl;
+		}
+
+		async startCrawl(domain) {
+			const response = await fetch(`${this.apiUrl}/api/crawl`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ domain, max_pages: 100 }),
+			});
+
+			if (!response.ok) {
+				throw new Error("Failed to start crawl");
+			}
+
+			return response.json();
+		}
+
+		async getCrawlStatus(jobId) {
+			const response = await fetch(`${this.apiUrl}/api/crawl/${jobId}`);
+
+			if (!response.ok) {
+				throw new Error("Failed to get crawl status");
+			}
+
+			return response.json();
+		}
+
+		async checkDomainReady(domain) {
+			try {
+				// Try a test chat to see if domain is ready
+				const response = await fetch(`${this.apiUrl}/api/chat`, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						question: "test",
+						domain: domain,
+						session_id: "test-session",
+					}),
+				});
+
+				return response.ok;
+			} catch (error) {
+				return false;
+			}
+		}
+
+		async sendMessage(question, sessionId, domain) {
+			const response = await fetch(`${this.apiUrl}/api/chat`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					question,
+					session_id: sessionId,
+					domain: domain,
+					require_reasoning: true,
+				}),
+			});
+
+			if (!response.ok) {
+				const errorData = await response.json();
+				throw new Error(errorData.detail || "Failed to send message");
+			}
+
+			return response.json();
+		}
+	}
+
+	// Initialize API
+	const api = new ChatbotAPI(config.apiUrl);
+
+	// Main chatbot class
+	class AIChatbot {
+		constructor() {
+			this.widget = document.getElementById("ai-chatbot-widget");
+			this.trigger = document.getElementById("ai-chatbot-trigger");
+			this.messages = document.getElementById("ai-chatbot-messages");
+			this.input = document.getElementById("ai-chatbot-input");
+			this.sendButton = document.getElementById("ai-chatbot-send");
+			this.badge = document.getElementById("ai-chatbot-badge");
+			this.crawlJobId = null;
+			this.ready = false;
+			this.domain = config.domain;
+
+			this.init();
+		}
+
+		async init() {
+			console.log("Initializing chatbot for domain:", this.domain);
+
+			// Add event listeners
+			this.input.addEventListener("keypress", (e) => {
+				if (e.key === "Enter" && !e.shiftKey) {
+					e.preventDefault();
+					this.sendMessage();
+				}
+			});
+
+			// Check if domain is already analyzed
+			if (config.autoStart) {
+				await this.checkDomainStatus();
+			}
+		}
+
+		async checkDomainStatus() {
+			try {
+				// Check if the domain is already ready for chat
+				const isReady = await api.checkDomainReady(this.domain);
+
+				if (isReady) {
+					console.log("Domain already analyzed, ready for chat");
+					this.onCrawlComplete();
+				} else {
+					console.log("Domain not ready, starting crawl");
+					await this.startCrawling();
+				}
+			} catch (error) {
+				console.error("Failed to check domain status:", error);
+				// Try to start crawling as fallback
+				await this.startCrawling();
+			}
+		}
+
+		async startCrawling() {
+			try {
+				const result = await api.startCrawl(this.domain);
+
+				this.crawlJobId = result.job_id;
+
+				if (result.status === "already_crawling") {
+					// Already ready
+					this.onCrawlComplete();
+				} else {
+					// Monitor progress
+					this.monitorCrawlProgress();
+				}
+			} catch (error) {
+				console.error("Failed to start crawling:", error);
+				this.showError("Failed to initialize. Please refresh the page.");
+			}
+		}
+
+		async monitorCrawlProgress() {
+			const checkProgress = async () => {
+				try {
+					const status = await api.getCrawlStatus(this.crawlJobId);
+
+					if (status.status === "completed") {
+						this.onCrawlComplete();
+					} else if (status.status === "failed") {
+						this.showError("Failed to analyze website. Please try again.");
+					} else {
+						// Update progress
+						const progress = status.progress || 0;
+						this.updateProgress(progress);
+
+						// Check again
+						setTimeout(checkProgress, 2000);
+					}
+				} catch (error) {
+					console.error("Failed to check progress:", error);
+					setTimeout(checkProgress, 5000);
+				}
+			};
+
+			checkProgress();
+		}
+
+		updateProgress(progress) {
+			const loading = document.getElementById("ai-chatbot-loading");
+			if (loading) {
+				loading.querySelector("span").textContent = `Analyzing website content... ${progress}%`;
+			}
+		}
+
+		onCrawlComplete() {
+			this.ready = true;
+			this.input.disabled = false;
+			this.sendButton.disabled = false;
+
+			// Clear welcome message
+			this.messages.innerHTML = "";
+
+			// Show ready message
+			this.addMessage("bot", `Hello! I've analyzed ${this.domain} and I'm ready to help. What would you like to know?`);
+
+			// Show notification badge
+			if (!isOpen) {
+				this.showBadge();
+			}
+		}
+
+		showError(message) {
+			const loading = document.getElementById("ai-chatbot-loading");
+			if (loading) {
+				loading.innerHTML = `<span style="color: #ef4444;">${message}</span>`;
+			}
+		}
+
+		toggle() {
+			if (isOpen) {
+				this.close();
+			} else {
+				this.open();
+			}
+		}
+
+		open() {
+			isOpen = true;
+			this.widget.classList.remove("ai-chatbot-hidden");
+			this.trigger.style.display = "none";
+			this.hideBadge();
+
+			// Focus input if ready
+			if (this.ready) {
+				this.input.focus();
+			}
+
+			// Start checking domain status if not started
+			if (!this.crawlJobId && config.autoStart && !this.ready) {
+				this.checkDomainStatus();
+			}
+		}
+
+		close() {
+			isOpen = false;
+			this.widget.classList.add("ai-chatbot-hidden");
+			this.trigger.style.display = "flex";
+		}
+
+		minimize() {
+			isMinimized = !isMinimized;
+			this.widget.classList.toggle("ai-chatbot-minimized");
+		}
+
+		showBadge() {
+			this.badge.style.display = "flex";
+		}
+
+		hideBadge() {
+			this.badge.style.display = "none";
+		}
+
+		async sendMessage() {
+			const message = this.input.value.trim();
+
+			if (!message || !this.ready) return;
+
+			// Clear input
+			this.input.value = "";
+
+			// Add user message
+			this.addMessage("user", message);
+
+			// Show typing indicator
+			const typingId = this.showTyping();
+
+			try {
+				// Send to API with domain
+				const response = await api.sendMessage(message, sessionId, this.domain);
+
+				// Store session ID
+				if (response.session_id) {
+					sessionId = response.session_id;
+					localStorage.setItem("ai_chatbot_session", sessionId);
+				}
+
+				// Remove typing indicator
+				this.removeTyping(typingId);
+
+				// Ensure we have a valid response
+				const answerText = response.answer || "I'm sorry, I couldn't generate a proper response. Please try asking your question differently.";
+
+				// Add bot response with error handling
+				this.addMessage("bot", answerText, response.sources || []);
+
+				// Debug logging
+				console.log("Response received:", response);
+			} catch (error) {
+				console.error("Failed to send message:", error);
+				this.removeTyping(typingId);
+				this.addMessage("bot", `Sorry, I encountered an error: ${error.message}. Please try again.`);
+			}
+		}
+
+		addMessage(sender, text, sources = []) {
+			// Ensure text is not empty
+			if (!text || text.trim() === "") {
+				text = "I received an empty response. Please try asking your question again.";
+			}
+
+			const messageDiv = document.createElement("div");
+			messageDiv.className = `ai-chatbot-message ai-chatbot-message-${sender}`;
+
+			const avatar = document.createElement("div");
+			avatar.className = "ai-chatbot-message-avatar";
+			avatar.textContent = sender === "user" ? "U" : "AI";
+
+			const content = document.createElement("div");
+			content.className = "ai-chatbot-message-content";
+
+			const textP = document.createElement("p");
+			textP.className = "ai-chatbot-message-text";
+			textP.textContent = text;
+			content.appendChild(textP);
+
+			// Add sources if available
+			if (sources && sources.length > 0) {
+				const sourcesDiv = document.createElement("div");
+				sourcesDiv.className = "ai-chatbot-message-sources";
+
+				const sourcesTitle = document.createElement("div");
+				sourcesTitle.className = "ai-chatbot-message-sources-title";
+				sourcesTitle.textContent = "Sources:";
+				sourcesDiv.appendChild(sourcesTitle);
+
+				sources.forEach((source) => {
+					if (source && source.url) {
+						const sourceLink = document.createElement("a");
+						sourceLink.className = "ai-chatbot-message-source";
+						sourceLink.href = source.url;
+						sourceLink.textContent = source.title || source.url;
+						sourceLink.target = "_blank";
+						sourcesDiv.appendChild(sourceLink);
+					}
+				});
+
+				content.appendChild(sourcesDiv);
+			}
+
+			messageDiv.appendChild(avatar);
+			messageDiv.appendChild(content);
+
+			this.messages.appendChild(messageDiv);
+
+			// Scroll to bottom
+			this.messages.scrollTop = this.messages.scrollHeight;
+
+			// Debug logging
+			console.log(`Message added - Sender: ${sender}, Text: "${text}"`);
+		}
+
+		showTyping() {
+			const typingId = `typing-${Date.now()}`;
+			const typingDiv = document.createElement("div");
+			typingDiv.id = typingId;
+			typingDiv.className = "ai-chatbot-message ai-chatbot-message-bot";
+			typingDiv.innerHTML = `
                 <div class="ai-chatbot-message-avatar">AI</div>
                 <div class="ai-chatbot-message-content">
                     <div class="ai-chatbot-typing">
@@ -731,36 +795,36 @@
                     </div>
                 </div>
             `;
-            
-            this.messages.appendChild(typingDiv);
-            this.messages.scrollTop = this.messages.scrollHeight;
-            
-            return typingId;
-        }
-        
-        removeTyping(typingId) {
-            const typingDiv = document.getElementById(typingId);
-            if (typingDiv) {
-                typingDiv.remove();
-            }
-        }
-    }
-    
-    // Initialize chatbot
-    const chatbot = new AIChatbot();
-    
-    // Expose API for external use
-    window.AIChatbot = {
-        open: () => chatbot.open(),
-        close: () => chatbot.close(),
-        toggle: () => chatbot.toggle(),
-        minimize: () => chatbot.minimize(),
-        sendMessage: () => chatbot.sendMessage(),
-        startCrawling: () => chatbot.startCrawling()
-    };
-    
-    // Add typing indicator styles
-    const typingStyles = `
+
+			this.messages.appendChild(typingDiv);
+			this.messages.scrollTop = this.messages.scrollHeight;
+
+			return typingId;
+		}
+
+		removeTyping(typingId) {
+			const typingDiv = document.getElementById(typingId);
+			if (typingDiv) {
+				typingDiv.remove();
+			}
+		}
+	}
+
+	// Initialize chatbot
+	const chatbot = new AIChatbot();
+
+	// Expose API for external use
+	window.AIChatbot = {
+		open: () => chatbot.open(),
+		close: () => chatbot.close(),
+		toggle: () => chatbot.toggle(),
+		minimize: () => chatbot.minimize(),
+		sendMessage: () => chatbot.sendMessage(),
+		startCrawling: () => chatbot.startCrawling(),
+	};
+
+	// Add typing indicator styles
+	const typingStyles = `
         <style>
             .ai-chatbot-typing {
                 display: inline-flex;
@@ -796,6 +860,6 @@
             }
         </style>
     `;
-    
-    document.head.insertAdjacentHTML('beforeend', typingStyles);
+
+	document.head.insertAdjacentHTML("beforeend", typingStyles);
 })();
