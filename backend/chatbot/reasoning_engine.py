@@ -7,16 +7,11 @@ from dataclasses import dataclass
 from enum import Enum
 import time
 import logging
-from .retrieval_optimizer import OptimizedRetriever
-from .complexity_classifier import ComplexityClassifier
+from .retrieval_optimizer import OptimizedRetriever, RetrievalResult
+from .complexity_classifier import ComplexityClassifier, QueryComplexity
+import hashlib
 
 logger = logging.getLogger(__name__)
-
-class QueryComplexity(Enum):
-    SIMPLE = "simple"        # Direct fact lookup
-    MODERATE = "moderate"    # Some inference needed
-    COMPLEX = "complex"      # Deep reasoning required
-    COMPUTATIONAL = "computational"  # Calculations needed
 
 @dataclass
 class ReasoningResponse:
@@ -29,7 +24,7 @@ class ReasoningResponse:
 
 class ReasoningEngine:
     """
-    Production-ready reasoning engine with tiered model approach
+    Natural conversation engine that acts like a knowledgeable employee
     """
     
     def __init__(self, config: Dict):
@@ -44,60 +39,19 @@ class ReasoningEngine:
         # Response cache
         self.cache = {}
         
+        # Conversation style - professional but friendly employee
+        self.conversation_style = {
+            "personality": "knowledgeable employee",
+            "tone": "professional yet friendly",
+            "knowledge_level": "complete",  # Acts like they know everything about the business
+        }
+        
     def _load_models(self):
-        """
-        Load reasoning models based on configuration
-        """
-        # Load efficient model (always)
-        logger.info("Loading Phi-3 for efficient responses...")
-        self._load_model(
-            'efficient',
-            'microsoft/Phi-3-medium-128k-instruct',
-            quantization='4bit'
-        )
-        
-        # Load secondary model if enough memory
-        if self._check_available_memory() > 16:
-            logger.info("Loading DeepSeek-R1 for moderate reasoning...")
-            self._load_model(
-                'secondary',
-                'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B',
-                quantization='4bit'
-            )
-            
-        # Load primary model if enough memory
-        if self._check_available_memory() > 24:
-            logger.info("Loading QwQ for complex reasoning...")
-            self._load_model(
-                'primary',
-                'Qwen/QwQ-32B-Preview',
-                quantization='4bit'
-            )
-            
-    def _load_model(self, tier: str, model_path: str, quantization: str):
-        """
-        Load a specific model with optimization
-        """
-        if quantization == '4bit':
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch.bfloat16
-            )
-        else:
-            bnb_config = None
-            
-        self.tokenizers[tier] = AutoTokenizer.from_pretrained(model_path)
-        self.models[tier] = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            quantization_config=bnb_config,
-            device_map="auto",
-            torch_dtype=torch.bfloat16,
-            trust_remote_code=True
-        )
-        
-        logger.info(f"✓ {tier} model loaded successfully")
+        """Load reasoning models based on configuration"""
+        # Simplified for testing - in production load actual models
+        logger.info("Initializing reasoning engine...")
+        self.models['efficient'] = None
+        self.tokenizers['efficient'] = None
         
     async def answer_question(
         self,
@@ -107,148 +61,159 @@ class ReasoningEngine:
         conversation_history: List[Dict] = []
     ) -> ReasoningResponse:
         """
-        Main entry point for answering questions
+        Generate response like a knowledgeable employee of the business
         """
         start_time = time.time()
         
-        # Check cache
-        cache_key = self._generate_cache_key(question, context)
-        if cache_key in self.cache:
-            cached = self.cache[cache_key]
-            cached.processing_time = time.time() - start_time
-            return cached
-            
-        # Classify query complexity
-        complexity = self.complexity_classifier.classify(question, context)
+        # Check if this is a greeting
+        question_lower = question.lower().strip()
+        is_greeting = any(greeting in question_lower for greeting in ['hi', 'hello', 'hey', 'howdy', 'greetings'])
         
-        # Retrieve relevant information
-        retrieved_info = await retriever.retrieve(
-            question,
-            {'conversation_history': conversation_history},
-            top_k=5
-        )
+        # Handle greetings based on conversation history
+        if is_greeting:
+            if len(conversation_history) == 0:
+                # First greeting - introduce as employee
+                answer = f"Hello! Welcome to {context}. I'm here to help you with any questions about our business, services, hours, or anything else you'd like to know. How can I assist you today?"
+                return ReasoningResponse(
+                    answer=answer,
+                    reasoning=None,
+                    confidence=1.0,
+                    sources=[],  # No sources for greeting
+                    query_type=QueryComplexity.SIMPLE,
+                    processing_time=time.time() - start_time
+                )
+            else:
+                # Already greeted - simple acknowledgment
+                answer = "Hello again! What else can I help you with?"
+                return ReasoningResponse(
+                    answer=answer,
+                    reasoning=None,
+                    confidence=1.0,
+                    sources=[],
+                    query_type=QueryComplexity.SIMPLE,
+                    processing_time=time.time() - start_time
+                )
         
-        # Route to appropriate handler
-        if complexity == QueryComplexity.SIMPLE:
-            response = await self._handle_simple(question, retrieved_info)
-        elif complexity == QueryComplexity.MODERATE:
-            response = await self._handle_moderate(question, retrieved_info, context)
-        elif complexity == QueryComplexity.COMPLEX:
-            response = await self._handle_complex(
-                question, retrieved_info, context, conversation_history
+        # For all other questions, retrieve relevant information
+        try:
+            retrieved_info = await retriever.retrieve(
+                question,
+                {'conversation_history': conversation_history},
+                top_k=5,
+                rerank=True
             )
-        elif complexity == QueryComplexity.COMPUTATIONAL:
-            response = await self._handle_computational(question, retrieved_info)
+        except Exception as e:
+            logger.error(f"Retrieval error: {e}")
+            retrieved_info = []
+        
+        # Extract actual content from retrieved information
+        relevant_content = []
+        sources = []
+        
+        for info in retrieved_info:
+            if info.content and len(info.content.strip()) > 10:
+                relevant_content.append(info.content.strip())
+                # Only add source if we're actually using this content
+                if info.metadata and info.metadata.get('url'):
+                    source = {
+                        'url': info.metadata['url'],
+                        'title': info.metadata.get('title', 'Source')
+                    }
+                    if source not in sources:
+                        sources.append(source)
+        
+        # Generate response based on what we found
+        if relevant_content:
+            # We have actual information - respond as knowledgeable employee
+            answer = self._generate_knowledgeable_response(question, relevant_content, context)
+            confidence = 0.95
         else:
-            response = await self._handle_moderate(question, retrieved_info, context)
-            
-        # Add processing time
-        response.processing_time = time.time() - start_time
+            # No specific information found - respond helpfully
+            answer = self._generate_helpful_response(question, context, conversation_history)
+            sources = []  # Don't show sources when we don't have specific info
+            confidence = 0.6
         
-        # Cache response
-        self.cache[cache_key] = response
-        
-        return response
-        
-    async def _handle_complex(
-        self,
-        question: str,
-        retrieved_info: List,
-        context: str,
-        history: List
-    ) -> ReasoningResponse:
-        """
-        Handle complex queries requiring deep reasoning
-        """
-        if 'primary' not in self.models:
-            # Fallback to best available
-            return await self._handle_moderate(question, retrieved_info, context)
-            
-        model = self.models['primary']
-        tokenizer = self.tokenizers['primary']
-        
-        # Build comprehensive prompt
-        prompt = self._build_complex_prompt(
-            question,
-            retrieved_info,
-            context,
-            history
-        )
-        
-        inputs = tokenizer(prompt, return_tensors="pt", truncation=True)
-        inputs = {k: v.to(model.device) for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=1024,
-                temperature=0.7,
-                do_sample=True,
-                top_p=0.95,
-                repetition_penalty=1.1
-            )
-            
-        response_text = tokenizer.decode(
-            outputs[0][inputs['input_ids'].shape[1]:],
-            skip_special_tokens=True
-        )
-        
-        # Parse response
-        answer, reasoning = self._parse_reasoning_response(response_text)
+        # Determine query complexity
+        complexity = self.complexity_classifier.classify(question, context)
         
         return ReasoningResponse(
             answer=answer,
-            reasoning=reasoning,
-            confidence=0.95,
-            sources=self._extract_sources(retrieved_info),
-            query_type=QueryComplexity.COMPLEX,
-            processing_time=0.0
+            reasoning=None,
+            confidence=confidence,
+            sources=sources[:3],  # Limit to 3 most relevant sources
+            query_type=complexity,
+            processing_time=time.time() - start_time
         )
+    
+    def _generate_knowledgeable_response(self, question: str, content_pieces: List[str], context: str) -> str:
+        """Generate response using actual knowledge like an employee would"""
+        question_lower = question.lower()
         
-    def _build_complex_prompt(
-        self,
-        question: str,
-        retrieved_info: List,
-        context: str,
-        history: List
-    ) -> str:
-        """
-        Build comprehensive prompt for complex reasoning
-        """
-        # Format retrieved information
-        info_text = "\n\n".join([
-            f"[Source {i+1}] {info.content}"
-            for i, info in enumerate(retrieved_info[:5])
-        ])
+        # Combine relevant content
+        combined_content = " ".join(content_pieces[:3])  # Use top 3 most relevant pieces
         
-        # Format conversation history
-        history_text = ""
-        if history:
-            history_text = "Previous conversation:\n"
-            for turn in history[-3:]:  # Last 3 turns
-                history_text += f"User: {turn['question']}\n"
-                history_text += f"Assistant: {turn['answer']}\n\n"
-                
-        prompt = f"""You are an expert customer service AI assistant. Think step by step to provide accurate, helpful answers.
-
-Business Context:
-{context}
-
-Retrieved Information:
-{info_text}
-
-{history_text}
-
-Customer Question: {question}
-
-Please think through this step by step:
-1. What is the customer really asking?
-2. What information is most relevant?
-3. Are there any unstated needs or implications?
-4. What additional context would be helpful?
-5. What's the most helpful response?
-
-Let me work through this:
-"""
+        # Different response patterns based on question type
+        if any(word in question_lower for word in ['what', 'about', 'tell me about', 'describe']):
+            # General information questions
+            if 'website' in question_lower or 'business' in question_lower or 'company' in question_lower:
+                # They want overview
+                response = f"{combined_content}"
+                if len(content_pieces) > 3:
+                    response += " I'd be happy to tell you more about any specific aspect that interests you."
+            else:
+                response = f"{combined_content}"
         
-        return prompt
+        elif any(word in question_lower for word in ['when', 'hours', 'open', 'close']):
+            # Hours/timing questions
+            response = f"{combined_content}"
+            
+        elif any(word in question_lower for word in ['where', 'location', 'address', 'find']):
+            # Location questions
+            response = f"{combined_content}"
+            
+        elif any(word in question_lower for word in ['how much', 'price', 'cost', 'fee']):
+            # Pricing questions
+            response = f"{combined_content}"
+            
+        elif any(word in question_lower for word in ['menu', 'options', 'choices', 'selection']):
+            # Menu/options questions
+            response = f"{combined_content}"
+            
+        elif any(word in question_lower for word in ['contact', 'phone', 'email', 'reach']):
+            # Contact questions
+            response = f"{combined_content}"
+            
+        elif any(word in question_lower for word in ['service', 'offer', 'provide', 'do']):
+            # Services questions
+            response = f"{combined_content}"
+            
+        else:
+            # Default pattern
+            response = f"{combined_content}"
+        
+        return response
+    
+    def _generate_helpful_response(self, question: str, context: str, history: List[Dict]) -> str:
+        """Generate helpful response when no specific information is found"""
+        question_lower = question.lower()
+        
+        # Check what they're asking about
+        if any(word in question_lower for word in ['hours', 'open', 'close', 'when']):
+            return "I don't have our hours information available at the moment. This information might be on our hours or contact page, or you could call us directly for current hours."
+            
+        elif any(word in question_lower for word in ['menu', 'food', 'dishes', 'eat']):
+            return "I don't have our menu details available right now. You might find this on our menu page, or I'd be happy to help you with other information about our business."
+            
+        elif any(word in question_lower for word in ['price', 'cost', 'how much', 'fee']):
+            return "I don't have specific pricing information available. For current prices, please check our pricing page or contact us directly."
+            
+        elif any(word in question_lower for word in ['service', 'offer', 'provide', 'what do you']):
+            return f"I don't have detailed information about our specific services right now. Would you like me to help you find our services page or contact information so you can get the details you need?"
+            
+        else:
+            # Generic helpful response
+            return f"I don't have specific information about that right now. Is there something else about {context} I can help you with? I can provide information about our business, location, contact details, or other general information."
+    
+    def _generate_cache_key(self, question: str, context: str) -> str:
+        """Generate cache key for response"""
+        return hashlib.md5(f"{question}:{context}".encode()).hexdigest()
